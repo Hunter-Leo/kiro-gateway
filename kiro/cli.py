@@ -31,8 +31,7 @@ Usage:
     kiro-gateway --host 127.0.0.1 --port 9000
 
     # Manage configuration
-    kiro-gateway config               # show current config
-    kiro-gateway config --edit        # re-run setup wizard
+    kiro-gateway config               # interactively edit saved config
     kiro-gateway config --reset       # delete saved config
     kiro-gateway config --show-path   # print config file path
 

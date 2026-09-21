@@ -247,7 +247,7 @@ def validate_configuration(silent: bool = False) -> bool:
         errors.append(
             "No Kiro credentials configured!\n"
             "\n"
-            f"Run 'kiro-gateway config --edit' to set up your credentials.\n"
+            f"Run 'kiro-gateway config' to set up your credentials.\n"
             "\n"
             "Or set environment variables directly:\n"
             "   REFRESH_TOKEN=\"your_refresh_token\"\n"

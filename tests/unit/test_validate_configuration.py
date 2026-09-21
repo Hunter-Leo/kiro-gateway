@@ -119,15 +119,18 @@ class TestValidateConfigurationReturnsFalse:
 
 
 class TestValidateConfigurationErrorMessage:
-    def test_error_message_contains_config_edit_hint(self) -> None:
-        """Error output should guide user to 'kiro-gateway config --edit'."""
+    def test_error_message_contains_config_hint(self) -> None:
+        """Error output should guide the user to the working 'kiro-gateway config'."""
         with _env():
             with patch("kiro.app._print_config_errors") as mock_print:
                 validate_configuration()
                 assert mock_print.called
                 errors = mock_print.call_args[0][0]
                 combined = "\n".join(errors)
-                assert "kiro-gateway config --edit" in combined
+                assert "Run 'kiro-gateway config'" in combined
+                # 'config --edit' is not a real flag: the CLI rejects it with
+                # "unrecognized arguments: --edit", so the hint must not name it.
+                assert "--edit" not in combined
 
     def test_error_message_contains_config_file_path(self) -> None:
         """Error output should show the user config file path."""
