@@ -32,6 +32,8 @@ Usage:
     from kiro.app import validate_configuration
 """
 
+import asyncio
+import json
 import logging
 import os
 import sys
@@ -49,23 +51,17 @@ from kiro.config import (
     APP_DESCRIPTION,
     APP_VERSION,
     REFRESH_TOKEN,
-    PROFILE_ARN,
-    REGION,
     KIRO_CREDS_FILE,
     KIRO_CLI_DB_FILE,
-    PROXY_API_KEY,
     LOG_LEVEL,
     STREAMING_READ_TIMEOUT,
-    HIDDEN_MODELS,
-    MODEL_ALIASES,
-    HIDDEN_FROM_LIST,
-    FALLBACK_MODELS,
     VPN_PROXY_URL,
     USER_CONFIG_FILE,
+    ACCOUNT_SYSTEM,
+    ACCOUNTS_CONFIG_FILE,
+    ACCOUNTS_STATE_FILE,
 )
-from kiro.auth import KiroAuthManager
-from kiro.cache import ModelInfoCache
-from kiro.model_resolver import ModelResolver
+from kiro.account_manager import AccountManager
 from kiro.routes_openai import router as openai_router
 from kiro.routes_anthropic import router as anthropic_router
 from kiro.exceptions import validation_exception_handler
@@ -220,6 +216,12 @@ def validate_configuration(silent: bool = False) -> bool:
         Callers are responsible for deciding what to do on False
         (e.g. launch the setup wizard or exit).
     """
+    # Account System takes priority: credentials.json existing means the
+    # legacy .env variables are not required.
+    if Path(ACCOUNTS_CONFIG_FILE).exists():
+        logger.debug(f"Found {ACCOUNTS_CONFIG_FILE}, skipping legacy .env validation")
+        return True
+
     errors = []
 
     has_refresh_token = bool(os.environ.get("REFRESH_TOKEN", REFRESH_TOKEN))
@@ -269,8 +271,8 @@ async def lifespan(app: FastAPI):
 
     Creates and initializes:
     - Shared HTTP client with connection pooling
-    - KiroAuthManager for token management
-    - ModelInfoCache for model caching
+    - AccountManager (credentials.json migration, per-account auth and models)
+    - The first working account, so at least one is ready before requests
 
     Args:
         app: The FastAPI application instance.
@@ -298,75 +300,178 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Shared HTTP client created with connection pooling")
 
-    app.state.auth_manager = KiroAuthManager(
-        refresh_token=REFRESH_TOKEN,
-        profile_arn=PROFILE_ARN,
-        region=REGION,
-        creds_file=KIRO_CREDS_FILE if KIRO_CREDS_FILE else None,
-        sqlite_db=KIRO_CLI_DB_FILE if KIRO_CLI_DB_FILE else None,
+    
+    # ==============================================================================
+    # Legacy Fallback: .env → credentials.json
+    # ==============================================================================
+    creds_path = Path(ACCOUNTS_CONFIG_FILE)
+    
+    # Check if we have legacy .env credentials
+    has_refresh_token = bool(REFRESH_TOKEN)
+    has_creds_file = bool(KIRO_CREDS_FILE) and Path(KIRO_CREDS_FILE).expanduser().exists()
+    has_cli_db = bool(KIRO_CLI_DB_FILE) and Path(KIRO_CLI_DB_FILE).expanduser().exists()
+    
+    # Helper function to add optional per-account overrides from .env
+    def _add_env_overrides(entry: dict) -> None:
+        """Add optional per-account overrides from .env (only if set)"""
+        profile_arn = os.getenv("PROFILE_ARN")
+        if profile_arn:
+            entry["profile_arn"] = profile_arn
+        
+        region = os.getenv("KIRO_REGION")
+        if region:
+            entry["region"] = region
+        
+        api_region = os.getenv("KIRO_API_REGION")
+        if api_region:
+            entry["api_region"] = api_region
+    
+    if ACCOUNT_SYSTEM:
+        # Account system enabled: create credentials.json ONCE (migration)
+        if not creds_path.exists():
+            if has_refresh_token or has_creds_file or has_cli_db:
+                logger.info("credentials.json not found, creating from .env (one-time migration)")
+                credentials = []
+                
+                # Priority: SQLite DB > JSON file > environment variables (same as KiroAuthManager)
+                if has_cli_db:
+                    entry = {
+                        "type": "sqlite",
+                        "path": KIRO_CLI_DB_FILE
+                    }
+                    _add_env_overrides(entry)
+                    credentials.append(entry)
+                elif has_creds_file:
+                    entry = {
+                        "type": "json",
+                        "path": KIRO_CREDS_FILE
+                    }
+                    _add_env_overrides(entry)
+                    credentials.append(entry)
+                elif has_refresh_token:
+                    entry = {
+                        "type": "refresh_token",
+                        "refresh_token": REFRESH_TOKEN
+                    }
+                    _add_env_overrides(entry)
+                    credentials.append(entry)
+            
+                # Save credentials.json
+                with open(creds_path, 'w', encoding='utf-8') as f:
+                    json.dump(credentials, f, indent=2, ensure_ascii=False)
+                
+                logger.info("Created credentials.json from .env (one-time migration)")
+    else:
+        # Legacy mode: ALWAYS recreate credentials.json from .env
+        if has_refresh_token or has_creds_file or has_cli_db:
+            logger.debug("Legacy mode: recreating credentials.json from .env")
+            credentials = []
+            
+            # Priority: SQLite DB > JSON file > environment variables (same as KiroAuthManager)
+            if has_cli_db:
+                entry = {
+                    "type": "sqlite",
+                    "path": KIRO_CLI_DB_FILE
+                }
+                _add_env_overrides(entry)
+                credentials.append(entry)
+            elif has_creds_file:
+                entry = {
+                    "type": "json",
+                    "path": KIRO_CREDS_FILE
+                }
+                _add_env_overrides(entry)
+                credentials.append(entry)
+            elif has_refresh_token:
+                entry = {
+                    "type": "refresh_token",
+                    "refresh_token": REFRESH_TOKEN
+                }
+                _add_env_overrides(entry)
+                credentials.append(entry)
+            
+            # Save credentials.json (overwrite if exists)
+            with open(creds_path, 'w', encoding='utf-8') as f:
+                json.dump(credentials, f, indent=2, ensure_ascii=False)
+            
+            logger.debug("credentials.json recreated from .env (legacy mode)")
+    
+    # ==============================================================================
+    # Create AccountManager
+    # ==============================================================================
+    app.state.account_manager = AccountManager(
+        credentials_file=ACCOUNTS_CONFIG_FILE,
+        state_file=ACCOUNTS_STATE_FILE
     )
-
-    app.state.model_cache = ModelInfoCache()
-
-    logger.info("Loading models from Kiro API...")
-    try:
-        token = await app.state.auth_manager.get_access_token()
-        from kiro.utils import get_kiro_headers
-        from kiro.auth import AuthType
-        headers = get_kiro_headers(app.state.auth_manager, token)
-
-        params = {"origin": "AI_EDITOR"}
-        if app.state.auth_manager.auth_type == AuthType.KIRO_DESKTOP and app.state.auth_manager.profile_arn:
-            params["profileArn"] = app.state.auth_manager.profile_arn
-
-        list_models_url = f"{app.state.auth_manager.q_host}/ListAvailableModels"
-        logger.debug(f"Fetching models from: {list_models_url}")
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
-                list_models_url,
-                headers=headers,
-                params=params
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                models_list = data.get("models", [])
-                await app.state.model_cache.update(models_list)
-                logger.debug(f"Successfully loaded {len(models_list)} models from Kiro API")
-            else:
-                raise Exception(f"HTTP {response.status_code}")
-    except Exception as e:
-        logger.error(f"Failed to fetch models from Kiro API: {e}")
-        logger.error("Using pre-configured fallback models. Not all models may be available on your plan, or the list may be outdated.")
-        await app.state.model_cache.update(FALLBACK_MODELS)
-        logger.debug(f"Loaded {len(FALLBACK_MODELS)} fallback models")
-
-    for display_name, internal_id in HIDDEN_MODELS.items():
-        app.state.model_cache.add_hidden_model(display_name, internal_id)
-
-    if HIDDEN_MODELS:
-        logger.debug(f"Added {len(HIDDEN_MODELS)} hidden models to cache")
-
-    all_models = app.state.model_cache.get_all_model_ids()
-    logger.info(f"Model cache ready: {len(all_models)} models total")
-
-    app.state.model_resolver = ModelResolver(
-        cache=app.state.model_cache,
-        hidden_models=HIDDEN_MODELS,
-        aliases=MODEL_ALIASES,
-        hidden_from_list=HIDDEN_FROM_LIST
+    
+    # Load credentials and state
+    await app.state.account_manager.load_credentials()
+    await app.state.account_manager.load_state()
+    
+    # Store account_system flag
+    app.state.account_system = ACCOUNT_SYSTEM
+    
+    # ==============================================================================
+    # Initialize first working account (blocking)
+    # ==============================================================================
+    all_accounts = list(app.state.account_manager._accounts.keys())
+    
+    if not all_accounts:
+        logger.error("No accounts configured in credentials.json")
+        raise RuntimeError("No accounts configured in credentials.json")
+    
+    # Determine start index from state.json
+    start_index = app.state.account_manager._current_account_index
+    
+    # Try to initialize accounts (full circle)
+    initialized = False
+    
+    for i in range(len(all_accounts)):
+        current_index = (start_index + i) % len(all_accounts)
+        account_id = all_accounts[current_index]
+        
+        logger.info(f"Attempting to initialize account: {account_id}")
+        
+        success = await app.state.account_manager._initialize_account(account_id)
+        
+        if success:
+            logger.info(f"Successfully initialized account: {account_id}")
+            initialized = True
+            break
+        else:
+            logger.warning(f"Failed to initialize account: {account_id}")
+    
+    if not initialized:
+        logger.error("Failed to initialize any account. Check your credentials.")
+        raise RuntimeError("Failed to initialize any account")
+    
+    # Save initial state
+    await app.state.account_manager._save_state()
+    
+    # Start background task for periodic state saving
+    save_task = asyncio.create_task(
+        app.state.account_manager.save_state_periodically()
     )
-    logger.info("Model resolver initialized")
-
-    if MODEL_ALIASES:
-        logger.debug(f"Model aliases configured: {list(MODEL_ALIASES.keys())}")
-    if HIDDEN_FROM_LIST:
-        logger.debug(f"Models hidden from list: {HIDDEN_FROM_LIST}")
-
+    
+    logger.info("Account system initialized successfully")
+    
     yield
-
+    
+    # Graceful shutdown
     logger.info("Shutting down application...")
+    
+    # Cancel background task
+    save_task.cancel()
+    try:
+        await save_task
+    except asyncio.CancelledError:
+        pass
+    
+    # Final state save
+    await app.state.account_manager._save_state()
+    logger.info("Final state saved")
+    
+    # Close HTTP client
     try:
         await app.state.http_client.aclose()
         logger.info("Shared HTTP client closed")

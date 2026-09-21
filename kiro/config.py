@@ -157,7 +157,20 @@ REFRESH_TOKEN: str = os.getenv("REFRESH_TOKEN", "")
 # Profile ARN for AWS CodeWhisperer
 PROFILE_ARN: str = os.getenv("PROFILE_ARN", "")
 
-# AWS region (default us-east-1)
+# AWS SSO/auth region (default us-east-1)
+# This region is used for OIDC token refresh endpoint: https://oidc.{region}.amazonaws.com/token
+#
+# IMPORTANT: SSO region may differ from Q API region!
+# - SSO region: Where your AWS SSO/IAM Identity Center is configured
+# - API region: Where Q Developer API endpoints are available (q.{region}.amazonaws.com)
+#
+# The gateway automatically detects the correct API region from your credentials:
+# - SQLite (kiro-cli): Extracts from profile ARN in state table
+# - JSON (Kiro IDE): Uses region field from credentials file
+# - Environment variables: Falls back to this SSO region
+#
+# For manual override of API region, use KIRO_API_REGION environment variable.
+# See: https://github.com/jwadow/kiro-gateway/issues/132
 REGION: str = os.getenv("KIRO_REGION", "us-east-1")
 
 # Path to credentials file (optional, alternative to .env)
@@ -173,6 +186,12 @@ KIRO_CREDS_FILE: str = str(Path(_raw_creds_file)) if _raw_creds_file else ""
 _raw_cli_db_file = _get_raw_env_value("KIRO_CLI_DB_FILE") or os.getenv("KIRO_CLI_DB_FILE", "")
 KIRO_CLI_DB_FILE: str = str(Path(_raw_cli_db_file)) if _raw_cli_db_file else ""
 
+# Disable SQLite write-back (read-only mode)
+# When enabled, gateway will only read from kiro-cli database without modifying it.
+# Useful when kiro-cli is actively managing tokens and you don't want gateway to interfere.
+# Default: false (write-back enabled)
+SQLITE_READONLY: bool = os.getenv("SQLITE_READONLY", "false").lower() in ("true", "1", "yes")
+
 # ==================================================================================================
 # Kiro API URL Templates
 # ==================================================================================================
@@ -187,10 +206,10 @@ AWS_SSO_OIDC_URL_TEMPLATE: str = "https://oidc.{region}.amazonaws.com/token"
 # Universal endpoint for all regions (us-east-1, eu-central-1, etc.)
 # See: https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/security-data-perimeter.html
 # Fixed in issue #58 - codewhisperer.{region}.amazonaws.com doesn't exist for non-us-east-1 regions
-KIRO_API_HOST_TEMPLATE: str = "https://q.{region}.amazonaws.com"
+KIRO_API_HOST_TEMPLATE: str = "https://runtime.{region}.kiro.dev"
 
 # Host for Q API (ListAvailableModels)
-KIRO_Q_HOST_TEMPLATE: str = "https://q.{region}.amazonaws.com"
+KIRO_Q_HOST_TEMPLATE: str = "https://runtime.{region}.kiro.dev"
 
 # ==================================================================================================
 # Token Settings
@@ -225,12 +244,8 @@ BASE_RETRY_DELAY: float = 1.0
 # Why "hidden"? These models work but are not advertised by Kiro's /ListAvailableModels.
 # We expose them to our users because they're useful.
 HIDDEN_MODELS: Dict[str, str] = {
-    # Claude 3.7 Sonnet - legacy flagship model, still works!
-    # Hidden in Kiro API but functional. Great for users who prefer it.
-    "claude-3.7-sonnet": "CLAUDE_3_7_SONNET_20250219_V1_0",
-    
-    # Add other hidden/experimental models here as discovered.
-    # Example: "claude-secret-model": "INTERNAL_SECRET_MODEL_ID",
+    # Claude 3.7 Sonnet - legacy model, maps to "auto" on new runtime endpoint
+    # "claude-3.7-sonnet": "auto",
 }
 
 # ==================================================================================================
@@ -288,9 +303,17 @@ HIDDEN_FROM_LIST: List[str] = ["auto"]
 FALLBACK_MODELS: List[Dict[str, str]] = [
     {"modelId": "auto"},
     {"modelId": "claude-sonnet-4"},
-    {"modelId": "claude-haiku-4.5"},
     {"modelId": "claude-sonnet-4.5"},
+    {"modelId": "claude-sonnet-4.6"},
+    {"modelId": "claude-haiku-4.5"},
     {"modelId": "claude-opus-4.5"},
+    {"modelId": "claude-opus-4.6"},
+    {"modelId": "claude-opus-4.7"},
+    {"modelId": "deepseek-3.2"},
+    {"modelId": "glm-5"},
+    {"modelId": "minimax-m2.1"},
+    {"modelId": "minimax-m2.5"},
+    {"modelId": "qwen3-coder-next"},
 ]
 
 # ==================================================================================================
@@ -437,11 +460,25 @@ _FAKE_REASONING_RAW: str = os.getenv("FAKE_REASONING", "").lower()
 # Default is True - if env var is not set or empty, enable fake reasoning
 FAKE_REASONING_ENABLED: bool = _FAKE_REASONING_RAW not in ("false", "0", "no", "disabled", "off")
 
-# Maximum thinking length in tokens.
+# Maximum thinking length in tokens (default budget when client doesn't specify).
 # This value is injected into the request as <max_thinking_length>{value}</max_thinking_length>
 # Higher values allow for more detailed reasoning but increase response time and token usage.
 # Default: 4000 tokens
 FAKE_REASONING_MAX_TOKENS: int = int(os.getenv("FAKE_REASONING_MAX_TOKENS", "4000"))
+
+# Maximum budget cap for fake reasoning when client sends thinking budget.
+#
+# WHY CAP? Fake reasoning uses output tokens (not separate thinking tokens like native API).
+# Large budgets can cause the model to spend ALL output tokens on reasoning with NOTHING
+# left for actual content. This cap prevents that.
+#
+# Default: 10000 tokens (2.5x default budget of 4000)
+# - Allows deeper reasoning than default
+# - Prevents excessive token consumption
+# - Still leaves room for actual response
+#
+# Set to 0 to disable capping (not recommended for production).
+FAKE_REASONING_BUDGET_CAP: int = int(os.getenv("FAKE_REASONING_BUDGET_CAP", "10000"))
 
 # How to handle the thinking block in responses:
 # - "as_reasoning_content": Extract to reasoning_content field (OpenAI-compatible, recommended)
@@ -469,10 +506,83 @@ FAKE_REASONING_INITIAL_BUFFER_SIZE: int = int(os.getenv("FAKE_REASONING_INITIAL_
 
 
 # ==================================================================================================
+# Payload Size Guard Settings
+# ==================================================================================================
+
+# Payload size limit in bytes (Kiro API rejects > ~615KB with cryptic 400 error)
+# Default 600KB provides safety margin below the ~615KB hard limit
+KIRO_MAX_PAYLOAD_BYTES: int = int(os.getenv("KIRO_MAX_PAYLOAD_BYTES", "600000"))
+
+# Auto-trim payload when over limit (default: false - disabled)
+# Enable this if you use many tools (30+) and hit "Improperly formed request" errors
+# When false, returns a clear error instead of trimming
+AUTO_TRIM_PAYLOAD: bool = os.getenv("AUTO_TRIM_PAYLOAD", "false").lower() in ("true", "1", "yes")
+
+# ==================================================================================================
+# WebSearch Settings (MCP Tool Emulation)
+# ==================================================================================================
+
+# Enable web_search tool auto-injection (default: true)
+# When enabled, web_search is automatically added as a tool for MCP emulation (Path B)
+# Model decides whether to use it or not
+#
+# Note: Native Anthropic server-side tools (Path A) work ALWAYS, regardless of this setting
+WEB_SEARCH_ENABLED: bool = os.getenv("WEB_SEARCH_ENABLED", "true").lower() in ("true", "1", "yes")
+
+# ==================================================================================================
+# Account System Settings
+# ==================================================================================================
+
+# Enable account system with failover (default: false)
+# When false: uses first account without failover (legacy mode)
+# When true: enables full failover loop with Circuit Breaker
+ACCOUNT_SYSTEM: bool = os.getenv("ACCOUNT_SYSTEM", "false").lower() in ("true", "1", "yes")
+
+# Path to credentials configuration file
+ACCOUNTS_CONFIG_FILE: str = os.getenv("ACCOUNTS_CONFIG_FILE", "credentials.json")
+
+# Path to runtime state file
+ACCOUNTS_STATE_FILE: str = os.getenv("ACCOUNTS_STATE_FILE", "state.json")
+
+# ==================================================================================================
+# Circuit Breaker Settings
+# ==================================================================================================
+
+# Base recovery timeout in seconds (for exponential backoff)
+# Actual timeout = BASE * 2^(failures - 1), capped at BASE * MAX_MULTIPLIER
+# Examples with BASE=60s, MAX=1440x:
+#   1 failure: 1m, 2: 2m, 3: 4m, 4: 8m, 5: 16m, 6: 32m, 7: 1h, 8: 2h, 9: 4h, 10: 8.5h, 11: 17h, 12+: 1d (cap)
+ACCOUNT_RECOVERY_TIMEOUT: int = int(os.getenv("ACCOUNT_RECOVERY_TIMEOUT", "60"))
+
+# Maximum backoff multiplier (cap for exponential backoff)
+# With BASE=60s and MAX=1440, maximum cooldown is 60 * 1440 = 86400s = 1 day
+ACCOUNT_MAX_BACKOFF_MULTIPLIER: float = float(os.getenv("ACCOUNT_MAX_BACKOFF_MULTIPLIER", "1440.0"))
+
+# Probabilistic retry chance for "broken" accounts (0.0 - 1.0)
+# Even if account is broken and timeout hasn't passed, try with this probability
+# Default: 0.1 (10% chance) - prevents permanent "stuck" state
+ACCOUNT_PROBABILISTIC_RETRY_CHANCE: float = float(os.getenv("ACCOUNT_PROBABILISTIC_RETRY_CHANCE", "0.1"))
+
+# ==================================================================================================
+# Account Cache Settings
+# ==================================================================================================
+
+# Model cache TTL in seconds (12 hours)
+# Cache is refreshed only when account is used (not in background)
+ACCOUNT_CACHE_TTL: int = int(os.getenv("ACCOUNT_CACHE_TTL", "43200"))
+
+# ==================================================================================================
+# State Persistence Settings
+# ==================================================================================================
+
+# Interval for periodic state.json saving in seconds
+STATE_SAVE_INTERVAL_SECONDS: int = int(os.getenv("STATE_SAVE_INTERVAL_SECONDS", "10"))
+
+# ==================================================================================================
 # Application Version
 # ==================================================================================================
 
-APP_VERSION: str = "2.3"
+APP_VERSION: str = "2.4.dev.13"
 APP_TITLE: str = "Kiro Gateway"
 APP_DESCRIPTION: str = "Proxy gateway for Kiro API (Amazon Q Developer / AWS CodeWhisperer). OpenAI and Anthropic compatible. Made by @jwadow"
 

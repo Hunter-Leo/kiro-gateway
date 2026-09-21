@@ -38,6 +38,7 @@ from kiro.converters_core import (
     tool_results_to_text,
     UnifiedMessage,
     UnifiedTool,
+    ThinkingConfig,
 )
 
 # Test data for images - 1x1 pixel JPEG
@@ -278,6 +279,25 @@ class TestExtractTextContent:
         print(f"Result: '{result}'")
         print(f"Comparing result: Expected 'Before toolAfter tool', Got '{result}'")
         assert result == "Before toolAfter tool"
+
+    def test_skips_tool_reference_blocks(self):
+        """
+        What it does: Verifies that tool_reference blocks are skipped during text extraction.
+        Purpose: Ensure Claude Code deferred tool references don't pollute text output.
+        """
+        print("Setup: Content with tool_reference blocks...")
+        content = [
+            {"type": "text", "text": "Loaded tools:"},
+            {"type": "tool_reference", "tool_name": "mcp__slack__read_channel"},
+            {"type": "tool_reference", "tool_name": "Read"},
+            {"type": "text", "text": " done"}
+        ]
+
+        print("Action: Extracting text...")
+        result = extract_text_content(content)
+
+        print(f"Comparing result: Expected 'Loaded tools: done', Got '{result}'")
+        assert result == "Loaded tools: done"
 
 
 # ==================================================================================================
@@ -1322,7 +1342,7 @@ class TestEnsureFirstMessageIsUser:
         
         print("Checking first message is synthetic user...")
         assert result[0].role == "user"
-        assert result[0].content == "(empty)"
+        assert result[0].content == "(empty placeholder)"
         
         print("Checking original messages are preserved...")
         assert result[1].role == "assistant"
@@ -1359,7 +1379,7 @@ class TestEnsureFirstMessageIsUser:
         print(f"Comparing length: Expected 2 (synthetic + original), Got {len(result)}")
         assert len(result) == 2
         assert result[0].role == "user"
-        assert result[0].content == "(empty)"
+        assert result[0].content == "(empty placeholder)"
         assert result[1].role == "assistant"
     
     def test_handles_assistant_user_assistant_sequence(self):
@@ -1380,7 +1400,7 @@ class TestEnsureFirstMessageIsUser:
         print(f"Comparing length: Expected 4 (synthetic + 3 original), Got {len(result)}")
         assert len(result) == 4
         assert result[0].role == "user"
-        assert result[0].content == "(empty)"
+        assert result[0].content == "(empty placeholder)"
         assert result[1].role == "assistant"
         assert result[2].role == "user"
         assert result[3].role == "assistant"
@@ -1409,7 +1429,7 @@ class TestEnsureFirstMessageIsUser:
         print("Checking synthetic user was prepended...")
         assert len(result) == 2
         assert result[0].role == "user"
-        assert result[0].content == "(empty)"
+        assert result[0].content == "(empty placeholder)"
         
         print("Checking tool_calls are preserved...")
         assert result[1].role == "assistant"
@@ -1443,7 +1463,7 @@ class TestEnsureFirstMessageIsUser:
     
     def test_uses_minimal_content_for_synthetic_message(self):
         """
-        What it does: Verifies synthetic message uses minimal content ("(empty)").
+        What it does: Verifies synthetic message uses minimal content ("(empty placeholder)").
         Purpose: Ensure minimal token usage and avoid disrupting conversation context.
         """
         print("Setup: Assistant-first conversation...")
@@ -1455,7 +1475,7 @@ class TestEnsureFirstMessageIsUser:
         result = ensure_first_message_is_user(messages)
         
         print("Checking synthetic message content...")
-        assert result[0].content == "(empty)"
+        assert result[0].content == "(empty placeholder)"
         print("✓ Synthetic message uses minimal content (matches LiteLLM behavior)")
 
 
@@ -1665,7 +1685,7 @@ class TestEnsureAlternatingRoles:
     Tests for ensure_alternating_roles function.
     
     This function ensures alternating user/assistant roles by inserting synthetic
-    assistant messages with "(empty)" content between consecutive user messages.
+    assistant messages with "(empty placeholder)" content between consecutive user messages.
     This is part of the fix for Issue #64 where multiple 'developer' roles
     (converted to 'user') create consecutive userInputMessage entries.
     """
@@ -1690,7 +1710,7 @@ class TestEnsureAlternatingRoles:
         assert result[0].role == "user"
         assert result[0].content == "First"
         assert result[1].role == "assistant"
-        assert result[1].content == "(empty)"
+        assert result[1].content == "(empty placeholder)"
         assert result[2].role == "user"
         assert result[2].content == "Second"
     
@@ -1714,11 +1734,11 @@ class TestEnsureAlternatingRoles:
         assert len(result) == 7
         print("Checking alternation pattern...")
         assert result[0].role == "user" and result[0].content == "First"
-        assert result[1].role == "assistant" and result[1].content == "(empty)"
+        assert result[1].role == "assistant" and result[1].content == "(empty placeholder)"
         assert result[2].role == "user" and result[2].content == "Second"
-        assert result[3].role == "assistant" and result[3].content == "(empty)"
+        assert result[3].role == "assistant" and result[3].content == "(empty placeholder)"
         assert result[4].role == "user" and result[4].content == "Third"
-        assert result[5].role == "assistant" and result[5].content == "(empty)"
+        assert result[5].role == "assistant" and result[5].content == "(empty placeholder)"
         assert result[6].role == "user" and result[6].content == "Fourth"
     
     def test_preserves_already_alternating_messages(self):
@@ -1767,15 +1787,15 @@ class TestEnsureAlternatingRoles:
         assert len(result) == 9
         print("Checking first group (A, synthetic, B)...")
         assert result[0].role == "user" and result[0].content == "A"
-        assert result[1].role == "assistant" and result[1].content == "(empty)"
+        assert result[1].role == "assistant" and result[1].content == "(empty placeholder)"
         assert result[2].role == "user" and result[2].content == "B"
         print("Checking real assistant...")
         assert result[3].role == "assistant" and result[3].content == "C"
         print("Checking second group (D, synthetic, E, synthetic, F)...")
         assert result[4].role == "user" and result[4].content == "D"
-        assert result[5].role == "assistant" and result[5].content == "(empty)"
+        assert result[5].role == "assistant" and result[5].content == "(empty placeholder)"
         assert result[6].role == "user" and result[6].content == "E"
-        assert result[7].role == "assistant" and result[7].content == "(empty)"
+        assert result[7].role == "assistant" and result[7].content == "(empty placeholder)"
         assert result[8].role == "user" and result[8].content == "F"
     
     def test_handles_empty_list(self):
@@ -1911,11 +1931,11 @@ class TestNormalizeAndAlternatingIntegration:
         assert len(result) == 7
         print("Checking alternation pattern...")
         assert result[0].role == "user" and result[0].content == "Context 1"
-        assert result[1].role == "assistant" and result[1].content == "(empty)"
+        assert result[1].role == "assistant" and result[1].content == "(empty placeholder)"
         assert result[2].role == "user" and result[2].content == "Context 2"
-        assert result[3].role == "assistant" and result[3].content == "(empty)"
+        assert result[3].role == "assistant" and result[3].content == "(empty placeholder)"
         assert result[4].role == "user" and result[4].content == "Context 3"
-        assert result[5].role == "assistant" and result[5].content == "(empty)"
+        assert result[5].role == "assistant" and result[5].content == "(empty placeholder)"
         assert result[6].role == "user" and result[6].content == "Question"
     
     def test_mixed_roles_are_normalized_and_alternated(self):
@@ -1950,13 +1970,13 @@ class TestNormalizeAndAlternatingIntegration:
         assert len(result) == 9
         print("Checking that all system/developer were converted to user...")
         assert result[0].role == "user" and result[0].content == "System"
-        assert result[1].role == "assistant" and result[1].content == "(empty)"
+        assert result[1].role == "assistant" and result[1].content == "(empty placeholder)"
         assert result[2].role == "user" and result[2].content == "Dev"
-        assert result[3].role == "assistant" and result[3].content == "(empty)"
+        assert result[3].role == "assistant" and result[3].content == "(empty placeholder)"
         assert result[4].role == "user" and result[4].content == "User1"
         assert result[5].role == "assistant" and result[5].content == "Assistant1"
         assert result[6].role == "user" and result[6].content == "Dev2"
-        assert result[7].role == "assistant" and result[7].content == "(empty)"
+        assert result[7].role == "assistant" and result[7].content == "(empty placeholder)"
         assert result[8].role == "user" and result[8].content == "User2"
 
 
@@ -3503,7 +3523,7 @@ class TestInjectThinkingTags:
         
         print("Action: Inject thinking tags with FAKE_REASONING_ENABLED=False...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', False):
-            result = inject_thinking_tags(content)
+            result = inject_thinking_tags(content, ThinkingConfig())
         
         print(f"Comparing result: Expected 'Hello, world!', Got '{result}'")
         assert result == "Hello, world!"
@@ -3519,7 +3539,7 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags with FAKE_REASONING_ENABLED=True...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 4000):
-                result = inject_thinking_tags(content)
+                result = inject_thinking_tags(content, ThinkingConfig())
         
         print(f"Result: {result[:200]}...")
         print("Checking that thinking_mode tag is present...")
@@ -3542,7 +3562,7 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 8000):
-                result = inject_thinking_tags(content)
+                result = inject_thinking_tags(content, ThinkingConfig())
         
         print(f"Result length: {len(result)} chars")
         print("Checking that thinking_instruction tag is present...")
@@ -3560,7 +3580,7 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 4000):
-                result = inject_thinking_tags(content)
+                result = inject_thinking_tags(content, ThinkingConfig())
         
         print("Checking for English directive...")
         assert "Think in English" in result
@@ -3576,7 +3596,8 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags with FAKE_REASONING_MAX_TOKENS=16000...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 16000):
-                result = inject_thinking_tags(content)
+                with patch('kiro.converters_core.FAKE_REASONING_BUDGET_CAP', 0):  # Disable cap
+                    result = inject_thinking_tags(content, ThinkingConfig())
         
         print(f"Result: {result[:300]}...")
         print("Checking that max_thinking_length uses configured value...")
@@ -3593,7 +3614,7 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 4000):
-                result = inject_thinking_tags(content)
+                result = inject_thinking_tags(content, ThinkingConfig())
         
         print(f"Result length: {len(result)} chars")
         print("Checking that tags are present even with empty content...")
@@ -3611,7 +3632,7 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 4000):
-                result = inject_thinking_tags(content)
+                result = inject_thinking_tags(content, ThinkingConfig())
         
         print("Checking that multiline content is preserved...")
         assert "Line 1\nLine 2\nLine 3" in result
@@ -3627,7 +3648,7 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 4000):
-                result = inject_thinking_tags(content)
+                result = inject_thinking_tags(content, ThinkingConfig())
         
         print("Checking that special characters are preserved...")
         assert "<code>example</code>" in result
@@ -3644,7 +3665,7 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 4000):
-                result = inject_thinking_tags(content)
+                result = inject_thinking_tags(content, ThinkingConfig())
         
         print("Checking for systematic approach keywords...")
         assert "thorough" in result.lower() or "systematic" in result.lower()
@@ -3660,7 +3681,7 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 4000):
-                result = inject_thinking_tags(content)
+                result = inject_thinking_tags(content, ThinkingConfig())
         
         print("Checking for understanding step...")
         assert "understand" in result.lower()
@@ -3676,7 +3697,7 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 4000):
-                result = inject_thinking_tags(content)
+                result = inject_thinking_tags(content, ThinkingConfig())
         
         print("Checking for verification step...")
         assert "verify" in result.lower()
@@ -3692,7 +3713,7 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 4000):
-                result = inject_thinking_tags(content)
+                result = inject_thinking_tags(content, ThinkingConfig())
         
         print("Checking for quality emphasis...")
         assert "quality" in result.lower()
@@ -3708,7 +3729,7 @@ class TestInjectThinkingTags:
         print("Action: Inject thinking tags...")
         with patch('kiro.converters_core.FAKE_REASONING_ENABLED', True):
             with patch('kiro.converters_core.FAKE_REASONING_MAX_TOKENS', 4000):
-                result = inject_thinking_tags(content)
+                result = inject_thinking_tags(content, ThinkingConfig())
         
         print("Checking tag order...")
         thinking_mode_pos = result.find("<thinking_mode>")
@@ -3878,7 +3899,7 @@ class TestBuildKiroHistory:
     
     def test_adds_empty_placeholder_for_empty_user_content(self):
         """
-        What it does: Verifies that "(empty)" placeholder is added for user messages with empty content.
+        What it does: Verifies that "(empty placeholder)" placeholder is added for user messages with empty content.
         Purpose: Ensure Kiro API receives non-empty content in history.
         
         This is a fallback test for issue #20 - ensures any edge case with empty content
@@ -3892,12 +3913,12 @@ class TestBuildKiroHistory:
         
         print(f"Result: {result}")
         print(f"Content: '{result[0]['userInputMessage']['content']}'")
-        print("Checking that '(empty)' placeholder is added...")
-        assert result[0]["userInputMessage"]["content"] == "(empty)"
+        print("Checking that '(empty placeholder)' placeholder is added...")
+        assert result[0]["userInputMessage"]["content"] == "(empty placeholder)"
     
     def test_adds_empty_placeholder_for_empty_assistant_content(self):
         """
-        What it does: Verifies that "(empty)" placeholder is added for assistant messages with empty content.
+        What it does: Verifies that "(empty placeholder)" placeholder is added for assistant messages with empty content.
         Purpose: Ensure Kiro API receives non-empty content in history.
         
         This is a fallback test for issue #20 - ensures any edge case with empty content
@@ -3911,12 +3932,12 @@ class TestBuildKiroHistory:
         
         print(f"Result: {result}")
         print(f"Content: '{result[0]['assistantResponseMessage']['content']}'")
-        print("Checking that '(empty)' placeholder is added...")
-        assert result[0]["assistantResponseMessage"]["content"] == "(empty)"
+        print("Checking that '(empty placeholder)' placeholder is added...")
+        assert result[0]["assistantResponseMessage"]["content"] == "(empty placeholder)"
     
     def test_adds_empty_placeholder_for_none_user_content(self):
         """
-        What it does: Verifies that "(empty)" placeholder is added for user messages with None content.
+        What it does: Verifies that "(empty placeholder)" placeholder is added for user messages with None content.
         Purpose: Ensure Kiro API receives non-empty content when content is None.
         """
         print("Setup: User message with None content...")
@@ -3927,12 +3948,12 @@ class TestBuildKiroHistory:
         
         print(f"Result: {result}")
         print(f"Content: '{result[0]['userInputMessage']['content']}'")
-        print("Checking that '(empty)' placeholder is added...")
-        assert result[0]["userInputMessage"]["content"] == "(empty)"
+        print("Checking that '(empty placeholder)' placeholder is added...")
+        assert result[0]["userInputMessage"]["content"] == "(empty placeholder)"
     
     def test_adds_empty_placeholder_for_none_assistant_content(self):
         """
-        What it does: Verifies that "(empty)" placeholder is added for assistant messages with None content.
+        What it does: Verifies that "(empty placeholder)" placeholder is added for assistant messages with None content.
         Purpose: Ensure Kiro API receives non-empty content when content is None.
         """
         print("Setup: Assistant message with None content...")
@@ -3943,8 +3964,8 @@ class TestBuildKiroHistory:
         
         print(f"Result: {result}")
         print(f"Content: '{result[0]['assistantResponseMessage']['content']}'")
-        print("Checking that '(empty)' placeholder is added...")
-        assert result[0]["assistantResponseMessage"]["content"] == "(empty)"
+        print("Checking that '(empty placeholder)' placeholder is added...")
+        assert result[0]["assistantResponseMessage"]["content"] == "(empty placeholder)"
     
     def test_preserves_non_empty_content_in_history(self):
         """
@@ -3990,10 +4011,10 @@ class TestBuildKiroHistory:
         assert result[0]["userInputMessage"]["content"] == "Start"
         
         print(f"Message 1 content: '{result[1]['assistantResponseMessage']['content']}'")
-        assert result[1]["assistantResponseMessage"]["content"] == "(empty)"
+        assert result[1]["assistantResponseMessage"]["content"] == "(empty placeholder)"
         
         print(f"Message 2 content: '{result[2]['userInputMessage']['content']}'")
-        assert result[2]["userInputMessage"]["content"] == "(empty)"
+        assert result[2]["userInputMessage"]["content"] == "(empty placeholder)"
         
         print(f"Message 3 content: '{result[3]['assistantResponseMessage']['content']}'")
         assert result[3]["assistantResponseMessage"]["content"] == "Response"
@@ -4467,7 +4488,7 @@ class TestStripAllToolContent:
                 content="",
                 tool_calls=[{"id": "call_1", "type": "function", "function": {"name": "tool", "arguments": "{}"}}]
             ),  # Has tool content
-            UnifiedMessage(role="user", content="Continue"),  # No tool content
+            UnifiedMessage(role="user", content="(empty placeholder)"),  # No tool content
         ]
         
         print("Action: Stripping tool content...")
@@ -4478,7 +4499,7 @@ class TestStripAllToolContent:
         assert result[0].content == "Hello"
         assert result[0].tool_calls is None
         assert result[1].tool_calls is None  # Stripped
-        assert result[2].content == "Continue"
+        assert result[2].content == "(empty placeholder)"
         assert result[2].tool_calls is None
         assert had_content is True
     
@@ -5365,7 +5386,7 @@ class TestBuildKiroPayloadIssue20:
             tools=None,  # NO TOOLS - this is the compaction scenario
             conversation_id="test-conv-123",
             profile_arn="arn:aws:codewhisperer:us-east-1:123456789:profile/test",
-            inject_thinking=False
+            thinking_config=ThinkingConfig(enabled=False)
         )
         
         print(f"Result payload keys: {result.payload.keys()}")
@@ -5432,7 +5453,7 @@ class TestBuildKiroPayloadIssue20:
             tools=None,
             conversation_id="test-conv",
             profile_arn="arn:test",
-            inject_thinking=False
+            thinking_config=ThinkingConfig(enabled=False)
         )
         
         print("Checking that important data is preserved...")
@@ -5486,7 +5507,7 @@ class TestBuildKiroPayloadIssue20:
                     "content": "Tool executed"
                 }]
             ),
-            UnifiedMessage(role="user", content="Continue")
+            UnifiedMessage(role="user", content="(empty placeholder)")
         ]
         
         tools = [UnifiedTool(
@@ -5503,7 +5524,7 @@ class TestBuildKiroPayloadIssue20:
             tools=tools,  # TOOLS DEFINED
             conversation_id="test-conv",
             profile_arn="arn:test",
-            inject_thinking=False
+            thinking_config=ThinkingConfig(enabled=False)
         )
         
         print("Checking that tools are in payload...")
@@ -5537,7 +5558,7 @@ class TestBuildKiroPayloadIssue20:
                     "function": {"name": "some_tool", "arguments": "{}"}
                 }]
             ),
-            UnifiedMessage(role="user", content="Continue")
+            UnifiedMessage(role="user", content="(empty placeholder)")
         ]
         
         print("Action: Building Kiro payload with empty tools list...")
@@ -5548,7 +5569,7 @@ class TestBuildKiroPayloadIssue20:
             tools=[],  # EMPTY TOOLS LIST
             conversation_id="test-conv",
             profile_arn="arn:test",
-            inject_thinking=False
+            thinking_config=ThinkingConfig(enabled=False)
         )
         
         print("Checking that NO tools in payload...")
@@ -5601,7 +5622,7 @@ class TestBuildKiroPayloadImages:
             tools=None,
             conversation_id="test-conv-123",
             profile_arn="arn:aws:codewhisperer:us-east-1:123456789:profile/test",
-            inject_thinking=False
+            thinking_config=ThinkingConfig(enabled=False)
         )
         
         print(f"Result payload keys: {result.payload.keys()}")
@@ -5648,7 +5669,7 @@ class TestBuildKiroPayloadImages:
             tools=None,
             conversation_id="test-conv",
             profile_arn="arn:test",
-            inject_thinking=False
+            thinking_config=ThinkingConfig(enabled=False)
         )
         
         current_msg = result.payload["conversationState"]["currentMessage"]["userInputMessage"]
@@ -5686,7 +5707,7 @@ class TestBuildKiroPayloadImages:
             tools=None,
             conversation_id="test-conv",
             profile_arn="arn:test",
-            inject_thinking=False
+            thinking_config=ThinkingConfig(enabled=False)
         )
         
         print("Checking history...")
@@ -5732,7 +5753,7 @@ class TestBuildKiroPayloadImages:
             tools=tools,
             conversation_id="test-conv",
             profile_arn="arn:test",
-            inject_thinking=False
+            thinking_config=ThinkingConfig(enabled=False)
         )
         
         current_msg = result.payload["conversationState"]["currentMessage"]["userInputMessage"]
@@ -5795,7 +5816,7 @@ class TestBuildKiroPayloadImages:
             tools=tools,
             conversation_id="test-conv",
             profile_arn="arn:test",
-            inject_thinking=False
+            thinking_config=ThinkingConfig(enabled=False)
         )
         
         # The last user message becomes current message
@@ -5833,7 +5854,7 @@ class TestBuildKiroPayloadImages:
             tools=None,
             conversation_id="test-conv",
             profile_arn="arn:test",
-            inject_thinking=False
+            thinking_config=ThinkingConfig(enabled=False)
         )
         
         context = result.payload["conversationState"]["currentMessage"]["userInputMessage"].get("userInputMessageContext", {})
@@ -5868,7 +5889,7 @@ class TestBuildKiroPayloadImages:
             tools=None,
             conversation_id="test-conv",
             profile_arn="arn:test",
-            inject_thinking=False
+            thinking_config=ThinkingConfig(enabled=False)
         )
         
         current_msg = result.payload["conversationState"]["currentMessage"]["userInputMessage"]
@@ -5902,7 +5923,7 @@ class TestBuildKiroPayloadImages:
                     tools=None,
                     conversation_id="test-conv",
                     profile_arn="arn:test",
-                    inject_thinking=True
+                    thinking_config=ThinkingConfig(enabled=True)
                 )
         
         current_msg = result.payload["conversationState"]["currentMessage"]["userInputMessage"]
@@ -6208,3 +6229,229 @@ class TestGetTruncationRecoverySystemAddition:
         lines = addition.split("\n")
         print(f"Comparing line count: Expected >5, Got {len(lines)}")
         assert len(lines) > 5
+
+
+# ==================================================================================================
+# Tests for Client Thinking Budget Support (Issue #111)
+# ==================================================================================================
+
+class TestThinkingConfig:
+    """Tests for ThinkingConfig dataclass."""
+    
+    def test_default_values(self):
+        """
+        What it does: Verifies ThinkingConfig() creates instance with enabled=True, budget_tokens=None
+        Purpose: Ensure default configuration enables thinking with default budget
+        """
+        print("Creating ThinkingConfig with defaults...")
+        config = ThinkingConfig()
+        
+        print(f"Comparing: enabled={config.enabled}, budget_tokens={config.budget_tokens}")
+        assert config.enabled is True
+        assert config.budget_tokens is None
+    
+    def test_custom_values(self):
+        """
+        What it does: Verifies ThinkingConfig(enabled=False, budget_tokens=8000) stores values correctly
+        Purpose: Ensure custom configuration is preserved
+        """
+        print("Creating ThinkingConfig with custom values...")
+        config = ThinkingConfig(enabled=False, budget_tokens=8000)
+        
+        print(f"Comparing: enabled={config.enabled}, budget_tokens={config.budget_tokens}")
+        assert config.enabled is False
+        assert config.budget_tokens == 8000
+    
+    def test_disabled_with_budget(self):
+        """
+        What it does: Verifies ThinkingConfig can be disabled even with budget specified
+        Purpose: Ensure enabled flag takes precedence over budget presence
+        """
+        print("Creating ThinkingConfig with enabled=False but budget=5000...")
+        config = ThinkingConfig(enabled=False, budget_tokens=5000)
+        
+        print(f"Comparing: enabled={config.enabled}, budget_tokens={config.budget_tokens}")
+        assert config.enabled is False
+        assert config.budget_tokens == 5000
+
+
+class TestInjectThinkingTagsWithConfig:
+    """Tests for inject_thinking_tags with ThinkingConfig parameter."""
+    
+    def test_disabled_by_global_flag(self, monkeypatch):
+        """
+        What it does: Verifies that tags are NOT injected when FAKE_REASONING_ENABLED=False
+        Purpose: Ensure global disable flag works regardless of config
+        """
+        print("Setting FAKE_REASONING_ENABLED=False...")
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_ENABLED", False)
+        
+        config = ThinkingConfig(enabled=True, budget_tokens=8000)
+        content = "Hello, world!"
+        
+        print(f"Calling inject_thinking_tags with config={config}...")
+        result = inject_thinking_tags(content, config)
+        
+        print(f"Comparing result: expected='{content}', got='{result}'")
+        assert result == content
+    
+    def test_disabled_by_client_request(self, monkeypatch):
+        """
+        What it does: Verifies that tags are NOT injected when thinking_config.enabled=False
+        Purpose: Ensure client can disable thinking per-request
+        """
+        print("Setting FAKE_REASONING_ENABLED=True...")
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_ENABLED", True)
+        
+        config = ThinkingConfig(enabled=False, budget_tokens=None)
+        content = "Hello, world!"
+        
+        print(f"Calling inject_thinking_tags with config={config}...")
+        result = inject_thinking_tags(content, config)
+        
+        print(f"Comparing result: expected='{content}', got='{result}'")
+        assert result == content
+    
+    def test_uses_default_budget(self, monkeypatch):
+        """
+        What it does: Verifies that FAKE_REASONING_MAX_TOKENS is used when budget_tokens=None
+        Purpose: Ensure default budget fallback works
+        """
+        print("Setting FAKE_REASONING_ENABLED=True, FAKE_REASONING_MAX_TOKENS=4000...")
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_ENABLED", True)
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_MAX_TOKENS", 4000)
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_BUDGET_CAP", 10000)
+        
+        config = ThinkingConfig(enabled=True, budget_tokens=None)
+        content = "Test content"
+        
+        print(f"Calling inject_thinking_tags with config={config}...")
+        result = inject_thinking_tags(content, config)
+        
+        print(f"Checking for <max_thinking_length>4000</max_thinking_length>...")
+        assert "<max_thinking_length>4000</max_thinking_length>" in result
+        assert "<thinking_mode>enabled</thinking_mode>" in result
+        assert "Test content" in result
+    
+    def test_uses_custom_budget(self, monkeypatch):
+        """
+        What it does: Verifies that custom budget_tokens is used when specified
+        Purpose: Ensure client-provided budget is respected
+        """
+        print("Setting FAKE_REASONING_ENABLED=True...")
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_ENABLED", True)
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_BUDGET_CAP", 10000)
+        
+        config = ThinkingConfig(enabled=True, budget_tokens=8000)
+        content = "Test content"
+        
+        print(f"Calling inject_thinking_tags with config={config}...")
+        result = inject_thinking_tags(content, config)
+        
+        print(f"Checking for <max_thinking_length>8000</max_thinking_length>...")
+        assert "<max_thinking_length>8000</max_thinking_length>" in result
+        assert "<thinking_mode>enabled</thinking_mode>" in result
+        assert "Test content" in result
+    
+    def test_applies_cap_with_warning(self, monkeypatch):
+        """
+        What it does: Verifies that budget > cap is capped and WARNING is logged
+        Purpose: Ensure cap prevents excessive thinking budget
+        """
+        from unittest.mock import patch, call
+        
+        print("Setting FAKE_REASONING_ENABLED=True, cap=10000...")
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_ENABLED", True)
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_BUDGET_CAP", 10000)
+        
+        config = ThinkingConfig(enabled=True, budget_tokens=50000)
+        content = "Test content"
+        
+        print(f"Calling inject_thinking_tags with budget=50000 (exceeds cap)...")
+        # Mock logger.warning to verify it's called
+        with patch("kiro.converters_core.logger.warning") as mock_warning:
+            result = inject_thinking_tags(content, config)
+            
+            print(f"Checking for capped value <max_thinking_length>10000</max_thinking_length>...")
+            assert "<max_thinking_length>10000</max_thinking_length>" in result
+            
+            print(f"Checking that logger.warning was called...")
+            assert mock_warning.called, "logger.warning should be called when budget exceeds cap"
+            
+            # Verify warning message content
+            warning_call = mock_warning.call_args[0][0]
+            print(f"Warning message: {warning_call}")
+            assert "exceeds cap" in warning_call
+            assert "50000" in warning_call
+            assert "10000" in warning_call
+    
+    def test_uses_budget_when_below_cap(self, monkeypatch):
+        """
+        What it does: Verifies that budget < cap is used without modification
+        Purpose: Ensure cap doesn't affect budgets below limit
+        """
+        print("Setting FAKE_REASONING_ENABLED=True, cap=10000...")
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_ENABLED", True)
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_BUDGET_CAP", 10000)
+        
+        config = ThinkingConfig(enabled=True, budget_tokens=5000)
+        content = "Test content"
+        
+        print(f"Calling inject_thinking_tags with budget=5000 (below cap)...")
+        result = inject_thinking_tags(content, config)
+        
+        print(f"Checking for <max_thinking_length>5000</max_thinking_length>...")
+        assert "<max_thinking_length>5000</max_thinking_length>" in result
+    
+    def test_cap_disabled_when_zero(self, monkeypatch):
+        """
+        What it does: Verifies that cap is NOT applied when FAKE_REASONING_BUDGET_CAP=0
+        Purpose: Ensure users can disable capping
+        """
+        print("Setting FAKE_REASONING_ENABLED=True, cap=0 (disabled)...")
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_ENABLED", True)
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_BUDGET_CAP", 0)
+        
+        config = ThinkingConfig(enabled=True, budget_tokens=50000)
+        content = "Test content"
+        
+        print(f"Calling inject_thinking_tags with budget=50000 (cap disabled)...")
+        result = inject_thinking_tags(content, config)
+        
+        print(f"Checking for <max_thinking_length>50000</max_thinking_length>...")
+        assert "<max_thinking_length>50000</max_thinking_length>" in result
+
+
+class TestBuildKiroPayloadWithThinkingConfig:
+    """Tests for build_kiro_payload with thinking_config parameter."""
+    
+    def test_passes_thinking_config_to_inject(self, monkeypatch):
+        """
+        What it does: Verifies that build_kiro_payload passes thinking_config to inject_thinking_tags
+        Purpose: Ensure thinking configuration flows through the pipeline
+        """
+        print("Setting up mocks...")
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_ENABLED", True)
+        monkeypatch.setattr("kiro.converters_core.FAKE_REASONING_BUDGET_CAP", 10000)
+        
+        messages = [UnifiedMessage(role="user", content="Test message")]
+        thinking_config = ThinkingConfig(enabled=True, budget_tokens=7000)
+        
+        print(f"Calling build_kiro_payload with thinking_config={thinking_config}...")
+        result = build_kiro_payload(
+            messages=messages,
+            system_prompt="",
+            model_id="claude-sonnet-4.5",
+            tools=None,
+            conversation_id="test-conv-123",
+            profile_arn="arn:aws:test",
+            thinking_config=thinking_config
+        )
+        
+        print("Extracting userInputMessage content...")
+        user_input = result.payload["conversationState"]["currentMessage"]["userInputMessage"]
+        content = user_input["content"]
+        
+        print(f"Checking for <max_thinking_length>7000</max_thinking_length> in content...")
+        assert "<max_thinking_length>7000</max_thinking_length>" in content
+        assert "<thinking_mode>enabled</thinking_mode>" in content

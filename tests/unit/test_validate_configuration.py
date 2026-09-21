@@ -6,7 +6,9 @@ Covers: returns True/False (no SystemExit), credential source checks,
 missing file warnings, and error message content.
 """
 
+import contextlib
 import os
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,9 +23,15 @@ from kiro.app import validate_configuration
 
 
 def _env(**kwargs: str):
-    """Return a patch.dict context that sets only the given env vars.
+    """Return a context manager that isolates configuration lookups.
 
-    Clears the three credential env vars first so tests are isolated.
+    Sets only the given env vars (clearing the three credential env vars
+    first) and points the Account System credentials file at a path that
+    does not exist.
+
+    The Account System takes priority over legacy .env validation, and the
+    test environment fixture creates a real credentials.json — so without
+    this override every case below would short-circuit to True.
     """
     base = {
         "REFRESH_TOKEN": "",
@@ -31,7 +39,13 @@ def _env(**kwargs: str):
         "KIRO_CLI_DB_FILE": "",
     }
     base.update(kwargs)
-    return patch.dict(os.environ, base, clear=False)
+
+    absent_creds = Path(tempfile.gettempdir()) / "kiro-gateway-tests" / "absent-credentials.json"
+
+    stack = contextlib.ExitStack()
+    stack.enter_context(patch.dict(os.environ, base, clear=False))
+    stack.enter_context(patch("kiro.app.ACCOUNTS_CONFIG_FILE", str(absent_creds)))
+    return stack
 
 
 # ---------------------------------------------------------------------------

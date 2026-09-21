@@ -1,6 +1,8 @@
 # Environment
 .env
 .env.local
+credentials.json
+state.json
 
 # IDE
 .vscode/
@@ -20,6 +22,9 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.venv/
+venv/
+.ruff_cache/
 
 # Debug logs (generated when DEBUG_MODE is enabled)
 debug_logs*/
@@ -28,6 +33,9 @@ debug*.json
 # Project-specific
 _notes/
 requests/
+
+# Local tooling state
+.omc/
 
 # Testing
 .pytest_cache/
