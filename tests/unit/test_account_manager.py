@@ -821,6 +821,79 @@ class TestAccountManagerInitializeAccount:
         assert success is True  # Should succeed with fallback
         assert manager._accounts[account_id].model_cache is not None
 
+    @pytest.mark.asyncio
+    async def test_initialize_account_fetches_models_on_runtime_host(
+        self, tmp_path, mock_list_models_response
+    ):
+        """
+        Test model list is fetched even when generation uses runtime.kiro.dev.
+
+        What it does: Initializes an account whose api_host is runtime.kiro.dev
+        Purpose: /ListAvailableModels is served by q.{region}.amazonaws.com, not
+                 by the generation host, so runtime accounts must still fetch it
+                 instead of falling back to the hardcoded FALLBACK_MODELS list
+        """
+        print("\n=== Test: initialize_account fetches models on runtime host ===")
+
+        # Arrange
+        test_json = tmp_path / "test.json"
+        test_json.write_text(json.dumps({
+            "refreshToken": "test_token",
+            "accessToken": "test_access",
+            "expiresAt": "2099-01-01T00:00:00.000Z",
+            "profileArn": "arn:aws:codewhisperer:us-east-1:123456789:profile/test",
+            "region": "us-east-1"
+        }))
+
+        creds_file = tmp_path / "credentials.json"
+        creds_file.write_text(json.dumps([
+            {"type": "json", "path": str(test_json), "enabled": True}
+        ]))
+
+        manager = AccountManager(
+            credentials_file=str(creds_file),
+            state_file=str(tmp_path / "state.json")
+        )
+
+        await manager.load_credentials()
+        account_id = str(test_json.resolve())
+
+        # Mock HTTP client for ListAvailableModels
+        with patch('kiro.account_manager.KiroHttpClient') as mock_http_class:
+            mock_client = AsyncMock()
+            mock_response = Mock()  # Response is not async
+            mock_response.status_code = 200
+            mock_response.json.return_value = mock_list_models_response
+            mock_client.request_with_retry = AsyncMock(return_value=mock_response)
+            mock_client.close = AsyncMock()
+            mock_http_class.return_value = mock_client
+
+            # Act
+            success = await manager._initialize_account(account_id)
+
+        # Assert
+        assert success is True
+        auth_manager = manager._accounts[account_id].auth_manager
+        print(f"api_host: {auth_manager.api_host}")
+        print(f"q_host:   {auth_manager.q_host}")
+
+        assert "://runtime." in auth_manager.api_host
+        assert auth_manager.q_host.startswith("https://q.")
+
+        # The list must come from the API, not from the hardcoded fallback
+        called_url = mock_client.request_with_retry.call_args.kwargs["url"]
+        print(f"Requested: {called_url}")
+        assert called_url == f"{auth_manager.q_host}/ListAvailableModels"
+
+        cached_model_ids = manager._accounts[account_id].model_cache.get_all_model_ids()
+        print(f"Cached models: {cached_model_ids}")
+        # Exactly the three models from the mocked response. Asserting the count
+        # (not mere membership) is what distinguishes a real fetch from the
+        # fallback path, whose FALLBACK_MODELS entries overlap these IDs.
+        assert sorted(cached_model_ids) == [
+            "claude-haiku-4.5", "claude-opus-4.5", "claude-sonnet-4.5"
+        ]
+
 
 class TestAccountManagerGetNextAccount:
     """

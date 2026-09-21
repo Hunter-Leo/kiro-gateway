@@ -341,6 +341,40 @@ class TestAwsSsoOidcUrlConfig:
             assert url == expected
 
 
+class TestKiroHostTemplates:
+    """Tests for the generation host and the Q control-plane host."""
+
+    def test_generation_host_stays_on_runtime_kiro_dev(self):
+        """
+        What it does: Verifies the generation host is runtime.{region}.kiro.dev.
+        Purpose: Pin the endpoint migration so it is not reverted by accident.
+        """
+        from kiro.config import get_kiro_api_host
+
+        print("Action: Calling get_kiro_api_host('us-east-1')...")
+        api_host = get_kiro_api_host("us-east-1")
+        print(f"api_host: {api_host}")
+        assert api_host == "https://runtime.us-east-1.kiro.dev"
+
+    def test_q_host_uses_amazonaws_q_endpoint(self):
+        """
+        What it does: Verifies the Q host is q.{region}.amazonaws.com.
+        Purpose: /ListAvailableModels and /mcp are served by the Q control-plane
+        host, not by runtime.{region}.kiro.dev (which 404s on the former and
+        rejects the latter), so the two hosts must not be the same.
+        """
+        from kiro.config import get_kiro_api_host, get_kiro_q_host
+
+        for region in ("us-east-1", "eu-central-1", "eu-west-1"):
+            print(f"Action: resolving hosts for {region}...")
+            api_host = get_kiro_api_host(region)
+            q_host = get_kiro_q_host(region)
+            print(f"Comparing: api_host={api_host}, q_host={q_host}")
+
+            assert q_host == f"https://q.{region}.amazonaws.com"
+            assert api_host != q_host
+
+
 class TestServerHostConfig:
     """Tests for SERVER_HOST configuration."""
     

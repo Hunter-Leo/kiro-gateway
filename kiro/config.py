@@ -208,8 +208,12 @@ AWS_SSO_OIDC_URL_TEMPLATE: str = "https://oidc.{region}.amazonaws.com/token"
 # Fixed in issue #58 - codewhisperer.{region}.amazonaws.com doesn't exist for non-us-east-1 regions
 KIRO_API_HOST_TEMPLATE: str = "https://runtime.{region}.kiro.dev"
 
-# Host for Q API (ListAvailableModels)
-KIRO_Q_HOST_TEMPLATE: str = "https://runtime.{region}.kiro.dev"
+# Host for Q API (ListAvailableModels, /mcp)
+# Deliberately NOT the generation host. runtime.{region}.kiro.dev serves
+# /generateAssistantResponse but answers /ListAvailableModels with
+# 404 UnknownOperationException, and rejects /mcp with "profileArn is
+# required". The Q control-plane host still serves both operations.
+KIRO_Q_HOST_TEMPLATE: str = "https://q.{region}.amazonaws.com"
 
 # ==================================================================================================
 # Token Settings
